@@ -19,6 +19,7 @@ var updateTreeIndex = 0
 var pathsWatchable []string
 
 var path []string
+var UpdateTreeDone = make(chan bool)
 
 func walkFunc(path string, info os.FileInfo, err error) error {
 	if err != nil {
@@ -31,13 +32,14 @@ func walkFunc(path string, info os.FileInfo, err error) error {
 	return nil
 }
 
+var scanned = false
+
 func updateTree(rootNode *Folder) {
 	file, err := os.OpenFile("FileSystemChanges.log", os.O_RDWR, 0644)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer file.Close()
-	fmt.Println("updating tree", updateTreeIndex)
 	updateTreeIndex++
 	// Process each line in the log file
 	scanner := bufio.NewScanner(file)
@@ -60,8 +62,6 @@ func updateTree(rootNode *Folder) {
 			continue
 		}
 
-		// fmt.Println("tree updated successfully for node : ", rootNode)
-		// fmt.Println("")
 		// Delete the line from the file if it was processed successfully
 		if err == nil {
 			_, err = file.Seek(0, 0)
@@ -104,6 +104,9 @@ func updateTree(rootNode *Folder) {
 			log.Fatal(err)
 		}
 		if fileInfo.Size() == 0 {
+			scanned = true
+			fmt.Println("tree updated")
+			UpdateTreeDone <- true
 			return
 		}
 	}
@@ -193,7 +196,6 @@ func watch(rootNode *Folder) {
 					log.Fatal(err)
 				}
 				if fileInfo.Size() > 0 {
-					time.Sleep(1 * time.Second)
 					updateTree(rootNode)
 				}
 			}
@@ -207,11 +209,11 @@ func watch(rootNode *Folder) {
 }
 
 func main() {
-	start := time.Now()
-	rootFolder := buildTree()
-	Encode(rootFolder)
-	elapsed := time.Since(start)
-	fmt.Printf("The operation took %s\n", elapsed)
+	// start := time.Now()
+	// rootFolder := buildTree()
+	// Encode(rootFolder)
+	// elapsed := time.Since(start)
+	// fmt.Printf("The operation took %s\n", elapsed)
 	file1, err := os.Open("treeNew1.bin.gz")
 	if err != nil {
 		fmt.Println("Error opening file:", err)
@@ -232,16 +234,16 @@ func main() {
 		fmt.Println("Error decoding binary data:", err)
 		return
 	}
-	fmt.Println("***************************************************************")
 	go watch(&root1)
 	// root1.PrintTree("")
-
+	// fmt.Println(UpdateTreeDone)
+	fileInfo, err := os.Stat("FileSystemChanges.log")
 	for {
+
+		if fileInfo.Size() > 0 {
+			<-UpdateTreeDone
+		}
 		root1.String("")
-		// for _, pathx := range path {
-		// 	fmt.Println(pathx)
-		// }
-		// root1.PrintTree("")
 		fmt.Print("Enter the term to search for (type 'exit' to quit): ")
 		var searchTerm string
 		fmt.Scanln(&searchTerm)
@@ -253,7 +255,8 @@ func main() {
 		sort.Sort(wordx)
 		// fmt.Println(wordx)
 		// limit upto 10 results in wordx
-		if len(wordx) > 20 {
+		fmt.Println(len(path), " total paths available")
+		if len(wordx) > 50 {
 			wordx = wordx[:50]
 		}
 		for _, word := range wordx {
@@ -262,6 +265,6 @@ func main() {
 		fmt.Println("***************************************************************")
 		path = []string{}
 	}
-
+	Encode(&root1)
 	fmt.Println("Exiting...")
 }
