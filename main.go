@@ -32,7 +32,6 @@ func walkFunc(path string, info os.FileInfo, err error) error {
 	return nil
 }
 
-var scanned = false
 
 func updateTree(rootNode *Folder) {
 	file, err := os.OpenFile("FileSystemChanges.log", os.O_RDWR, 0644)
@@ -104,9 +103,6 @@ func updateTree(rootNode *Folder) {
 			log.Fatal(err)
 		}
 		if fileInfo.Size() == 0 {
-			scanned = true
-			fmt.Println("tree updated")
-			UpdateTreeDone <- true
 			return
 		}
 	}
@@ -197,6 +193,7 @@ func watch(rootNode *Folder) {
 				}
 				if fileInfo.Size() > 0 {
 					updateTree(rootNode)
+				} else {
 				}
 			}
 		case err, ok := <-watcher.Errors:
@@ -237,12 +234,7 @@ func main() {
 	go watch(&root1)
 	// root1.PrintTree("")
 	// fmt.Println(UpdateTreeDone)
-	fileInfo, err := os.Stat("FileSystemChanges.log")
 	for {
-
-		if fileInfo.Size() > 0 {
-			<-UpdateTreeDone
-		}
 		root1.String("")
 		fmt.Print("Enter the term to search for (type 'exit' to quit): ")
 		var searchTerm string
