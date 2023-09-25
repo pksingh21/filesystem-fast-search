@@ -6,109 +6,19 @@ import (
 	"compress/gzip"
 	"encoding/gob"
 	"fmt"
-	"log"
-	"strings"
-
-	// "log"
-	"os"
-	"path/filepath"
-
-	// "sort"
-	// "strings"
-	"sync"
-	"time"
-
 	"github.com/fsnotify/fsnotify"
-	// "github.com/iafan/cwalk"
-	// "github.com/lithammer/fuzzysearch/fuzzy"
+	"github.com/lithammer/fuzzysearch/fuzzy"
+	"log"
+	"os"
+	"sort"
+	"strings"
+	"time"
 )
-
-type Folder struct {
-	Name    string
-	Files   []string
-	Folders map[string]*Folder
-	mu      sync.Mutex
-}
 
 var updateTreeIndex = 0
 var pathsWatchable []string
 
-func newFolder(name string) *Folder {
-	return &Folder{name, []string{}, make(map[string]*Folder), sync.Mutex{}}
-}
-
-func (f *Folder) addFolder(path []string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	temp := f
-	for _, segment := range path {
-		var temp1 *Folder
-		if nextF, ok := temp.Folders[segment]; ok { // last segment == new folder
-			temp1 = nextF
-		} else {
-			temp.Folders[segment] = newFolder(segment)
-			temp1, _ = temp.Folders[segment]
-		}
-		temp = temp1
-	}
-}
-
-func (f *Folder) addFile(path []string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for i, segment := range path {
-		if i == len(path)-1 {
-			f.Files = append(f.Files, segment)
-		} else if nextF, ok := f.Folders[segment]; ok {
-			f = nextF
-		} else {
-			f.Folders[segment] = newFolder(segment)
-			f, _ = f.Folders[segment]
-		}
-	}
-
-}
-
-// p := 0
 var path []string
-
-func (f *Folder) String(init string) error {
-	for _, file := range f.Files {
-		path = append(path, init+string(filepath.Separator)+f.Name+string(filepath.Separator)+file)
-	}
-	for _, folder := range f.Folders {
-		if len(f.Name) > 0 {
-			folder.String(init + string(filepath.Separator) + f.Name)
-		} else {
-			folder.String(init)
-		}
-	}
-	return nil
-}
-
-func Encode(root *Folder) {
-	file, err := os.Create("treeNew1.bin.gz")
-	if err != nil {
-		fmt.Println("Error creating file:", err)
-		return
-	}
-	defer file.Close()
-
-	// Create a Gzip writer
-	gzipWriter := gzip.NewWriter(file)
-	defer gzipWriter.Close()
-
-	// Create an encoder using the gob package
-	encoder := gob.NewEncoder(gzipWriter)
-
-	// Encode the root structure into binary format
-	err = encoder.Encode(root)
-	if err != nil {
-		fmt.Println("Error encoding to binary:", err)
-		return
-	}
-
-}
 
 func walkFunc(path string, info os.FileInfo, err error) error {
 	if err != nil {
@@ -121,7 +31,7 @@ func walkFunc(path string, info os.FileInfo, err error) error {
 	return nil
 }
 
-func updateTree() {
+func updateTree(rootNode *Folder) {
 	file, err := os.OpenFile("FileSystemChanges.log", os.O_RDWR, 0644)
 	if err != nil {
 		log.Fatal(err)
@@ -140,16 +50,18 @@ func updateTree() {
 		// Process the line based on the action
 		switch action {
 		case "moved":
-			err = MoveFile(sourcePath, destinationPath)
+			err = MoveFile(sourcePath, destinationPath, rootNode)
 		case "deleted":
-			err = DeleteFile(sourcePath)
+			err = DeleteFile(sourcePath, rootNode)
 		case "created":
-			err = CreateFile(sourcePath)
+			err = CreateFile(sourcePath, rootNode)
 		default:
 			log.Printf("unknown action: %s", action)
 			continue
 		}
 
+		// fmt.Println("tree updated successfully for node : ", rootNode)
+		// fmt.Println("")
 		// Delete the line from the file if it was processed successfully
 		if err == nil {
 			_, err = file.Seek(0, 0)
@@ -246,14 +158,14 @@ func contains(slice []string, str string) bool {
 	}
 	return false
 }
-func watch() {
+func watch(rootNode *Folder) {
 	// check if FileSystemChanges.log exists and if it's not zero then call the updateTree function
 	fileInfo, err := os.Stat("FileSystemChanges.log")
 	if err != nil {
 		log.Fatal(err)
 	}
 	if fileInfo.Size() > 0 {
-		updateTree()
+		updateTree(rootNode)
 	}
 
 	watcher, err := fsnotify.NewWatcher()
@@ -282,7 +194,7 @@ func watch() {
 				}
 				if fileInfo.Size() > 0 {
 					time.Sleep(1 * time.Second)
-					updateTree()
+					updateTree(rootNode)
 				}
 			}
 		case err, ok := <-watcher.Errors:
@@ -293,73 +205,63 @@ func watch() {
 		}
 	}
 }
+
 func main() {
-	// start := time.Now()
-	// rootFolder := newFolder("")
-	watch()
-	// visit := func(path string, info os.FileInfo, err error) error {
-	// 	segments := strings.Split(path, string(filepath.Separator))
-	// 	if len(segments) == 1 && segments[0] == "" {
-	// 		return nil
-	// 	}
-	// 	if info != nil && info.IsDir() {
-	// 		if len(segments) > 0 {
-	// 			rootFolder.addFolder(segments)
-	// 		}
-	// 	} else {
-	// 		rootFolder.addFile(segments)
-	// 	}
-	// 	return nil
-	// }
+	start := time.Now()
+	rootFolder := buildTree()
+	Encode(rootFolder)
+	elapsed := time.Since(start)
+	fmt.Printf("The operation took %s\n", elapsed)
+	file1, err := os.Open("treeNew1.bin.gz")
+	if err != nil {
+		fmt.Println("Error opening file:", err)
+		return
+	}
+	defer file1.Close()
+	// Create a Gzip reader
+	gzipReader, err := gzip.NewReader(file1)
+	if err != nil {
+		fmt.Println("Error creating Gzip reader:", err)
+		return
+	}
+	defer gzipReader.Close()
+	decoder := gob.NewDecoder(gzipReader)
+	var root1 Folder
+	err = decoder.Decode(&root1)
+	if err != nil {
+		fmt.Println("Error decoding binary data:", err)
+		return
+	}
+	fmt.Println("***************************************************************")
+	go watch(&root1)
+	// root1.PrintTree("")
 
-	// err := cwalk.Walk("/", visit)
-	// // err := filepath.Walk("/", visit)
-	// if err != nil {
-	// 	// log.Fatal(err)
-	// 	fmt.Println(err)
-	// }
+	for {
+		root1.String("")
+		// for _, pathx := range path {
+		// 	fmt.Println(pathx)
+		// }
+		// root1.PrintTree("")
+		fmt.Print("Enter the term to search for (type 'exit' to quit): ")
+		var searchTerm string
+		fmt.Scanln(&searchTerm)
+		searchTerm = strings.TrimSpace(searchTerm)
+		if searchTerm == "exit" {
+			break
+		}
+		wordx := fuzzy.RankFindFold(searchTerm, path)
+		sort.Sort(wordx)
+		// fmt.Println(wordx)
+		// limit upto 10 results in wordx
+		if len(wordx) > 20 {
+			wordx = wordx[:50]
+		}
+		for _, word := range wordx {
+			fmt.Println(word)
+		}
+		fmt.Println("***************************************************************")
+		path = []string{}
+	}
 
-	// Encode(rootFolder)
-	// elapsed := time.Since(start)
-	// fmt.Printf("The operation took %s\n", elapsed)
-
-	// file1, err := os.Open("treeNew1.bin.gz")
-	// if err != nil {
-	// 	fmt.Println("Error opening file:", err)
-	// 	return
-	// }
-	// defer file1.Close()
-
-	// // Create a Gzip reader
-	// gzipReader, err := gzip.NewReader(file1)
-	// if err != nil {
-	// 	fmt.Println("Error creating Gzip reader:", err)
-	// 	return
-	// }
-	// defer gzipReader.Close()
-
-	// start1 := time.Now()
-	// // Create a decoder using the gob package
-	// decoder := gob.NewDecoder(gzipReader)
-
-	// // Create a root structure to decode into
-	// var root1 Folder
-
-	// // Decode the binary data into the root structure
-	// err = decoder.Decode(&root1)
-	// if err != nil {
-	// 	fmt.Println("Error decoding binary data:", err)
-	// 	return
-	// }
-
-	// root1.String("")
-	// // println(root1.Name)
-	// fmt.Println("***************************************************************")
-	// wordx := fuzzy.RankFindFold("20CS01003", path) // [cartwheel wheel]
-	// elapsed1 := time.Since(start1)
-	// fmt.Printf("The operation took %s\n", elapsed1)
-	// sort.Sort(wordx)
-	// for _, word := range wordx {
-	// 	fmt.Println(word)
-	// }
+	fmt.Println("Exiting...")
 }
